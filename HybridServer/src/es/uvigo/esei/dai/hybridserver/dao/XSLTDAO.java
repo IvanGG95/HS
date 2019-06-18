@@ -21,7 +21,7 @@ public class XSLTDAO {
 	public String create(String content, String uuidXSD) throws SQLException {
 		UUID randomUuid = UUID.randomUUID();
 		String uuid = randomUuid.toString();
-		String query = "INSERT INTO XSLT (uuid, content, xsduuid) " + "VALUES (?, ?, ?)";
+		String query = "INSERT INTO XSLT (uuid, content, xsd) " + "VALUES (?, ?, ?)";
 		try (Connection connection = DriverManager.getConnection(parametrosConexion.get(0), parametrosConexion.get(1), parametrosConexion.get(2))) {
 			try (PreparedStatement statement = connection.prepareStatement(query)) {
 
@@ -52,7 +52,7 @@ public class XSLTDAO {
 	}
 	
 	public String getUuidXSD(String uuid) throws SQLException {
-		String query = "SELECT xsduuid " + "FROM XSLT " + "WHERE uuid = ?";
+		String query = "SELECT xsd " + "FROM XSLT " + "WHERE uuid = ?";
 		try (Connection connection = DriverManager.getConnection(parametrosConexion.get(0), parametrosConexion.get(1), parametrosConexion.get(2))) {
 			try (PreparedStatement statement = connection.prepareStatement(query)) {
 
@@ -60,7 +60,7 @@ public class XSLTDAO {
 
 				try (ResultSet result = statement.executeQuery()) {
 					result.next();
-					return result.getString("xsduuid");
+					return result.getString("xsd");
 					
 				}
 

@@ -1,12 +1,33 @@
 package es.uvigo.esei.dai.hybridserver;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.StringReader;
+import java.io.StringWriter;
 import java.net.Socket;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Properties;
+
+import javax.xml.XMLConstants;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.transform.Result;
+import javax.xml.transform.Source;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerException;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.stream.StreamResult;
+import javax.xml.transform.stream.StreamSource;
+import javax.xml.validation.Schema;
+import javax.xml.validation.SchemaFactory;
+
+import org.w3c.dom.Document;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
 
 import es.uvigo.esei.dai.hybridserver.dao.HTMLDAO;
 import es.uvigo.esei.dai.hybridserver.dao.HTMLException;
@@ -82,7 +103,6 @@ public class ServiceThread implements Runnable {
 								} catch (Exception e) {
 									e.printStackTrace();
 								}
-
 
 							} else {
 								try {
@@ -194,6 +214,79 @@ public class ServiceThread implements Runnable {
 						}
 						break;
 					case GET:
+						if (request.getResourceParameters().containsKey("uuid")
+								&& request.getResourceParameters().containsKey("xslt")) {
+
+							XSLTDAO xsltdao = new XSLTDAO(parametrosConexion);
+							if (xmldao.uuidList().contains(request.getResourceParameters().get("uuid"))
+									&& xsltdao.uuidList().contains(request.getResourceParameters().get("xslt"))) {
+								String uuidXSLT = request.getResourceParameters().get("xslt");
+								String uuidXSD = xsltdao.getUuidXSD(uuidXSLT);
+								XSDDAO xsddao = new XSDDAO(parametrosConexion);
+								String xsdContent = xsddao.getContent(uuidXSD);
+								String xmlContent = xmldao.getContent(request.getResourceParameters().get("uuid"));
+								try {
+									SchemaFactory schemaFactory = SchemaFactory
+											.newInstance(XMLConstants.W3C_XML_SCHEMA_NS_URI);
+									Schema schema = schemaFactory
+											.newSchema(new StreamSource(new StringReader(xsdContent)));
+
+									// Construcción del parser del documento. Se establece el esquema y se activa
+									// la validación y comprobación de namespaces
+									DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+									factory.setValidating(false);
+									factory.setNamespaceAware(true);
+									factory.setSchema(schema);
+
+									// Se añade el manejador de errores
+									DocumentBuilder builder = factory.newDocumentBuilder();
+									builder.setErrorHandler(new SimpleErrorHandler());
+
+									builder.parse(new InputSource(new StringReader(xmlContent)));
+
+									StringWriter writer = new StringWriter();
+
+									transform(new StreamSource(new StringReader(xmlContent)),
+											new StreamSource(new StringReader(xsltdao.getContent(uuidXSLT))),
+											new StreamResult(writer));
+
+									String webPage = writer.toString();
+									byte[] content = webPage.getBytes();
+
+									try {
+										output = socket.getOutputStream();
+										output.write("HTTP/1.1 200 OK\r\n".getBytes());
+										String contentLenght = String.format("Content-Lenght: %d\r\n", content.length);
+										output.write(contentLenght.getBytes());
+										output.write("Content-Type: text/html\r\n".getBytes());
+										output.write("\r\n".getBytes());
+										output.write(content);
+										output.flush();
+									} catch (Exception e) {
+										e.printStackTrace();
+									}
+								} catch (SAXException | ParserConfigurationException | TransformerException e) {
+									System.err.println("Documento XML no válido");
+									try {
+										output = socket.getOutputStream();
+										output.write("HTTP/1.1 400 Bad Request\r\n".getBytes());
+										output.flush();
+									} catch (Exception e1) {
+										e.printStackTrace();
+									}
+								}
+							} else {
+								try {
+									output = socket.getOutputStream();
+									output.write("HTTP/1.1 404 Not Found\r\n".getBytes());
+									output.flush();
+								} catch (Exception e) {
+									e.printStackTrace();
+								}
+							}
+
+						}
+
 						if (request.getResourceParameters().containsKey("uuid")) {
 							if (xmldao.uuidList().contains(request.getResourceParameters().get("uuid"))) {
 								String webPage = xmldao.getContent(request.getResourceParameters().get("uuid"));
@@ -431,20 +524,28 @@ public class ServiceThread implements Runnable {
 							System.out.println(newPage);
 							String uuidXSD = request.getResourceParameters().get("xsd");
 							System.out.println(uuidXSD);
-							String uuid = xsltdao.create(newPage, uuidXSD);
-
-							byte[] content1 = ("<a href=\"xslt?uuid=" + uuid + "\">" + uuid + "</a>").getBytes();
 							try {
-								output = socket.getOutputStream();
-								output.write("HTTP/1.1 200 OK\r\n".getBytes());
-								String contentLenght1 = String.format("Content-Lenght: %d\r\n", content1.length);
-								output.write(contentLenght1.getBytes());
-								output.write("Content-Type: application/xml\r\n".getBytes());
-								output.write("\r\n".getBytes());
-								output.write(content1);
-								output.flush();
+
+								String uuid = xsltdao.create(newPage, uuidXSD);
+
+								byte[] content1 = ("<a href=\"xslt?uuid=" + uuid + "\">" + uuid + "</a>").getBytes();
+								try {
+									output = socket.getOutputStream();
+									output.write("HTTP/1.1 200 OK\r\n".getBytes());
+									String contentLenght1 = String.format("Content-Lenght: %d\r\n", content1.length);
+									output.write(contentLenght1.getBytes());
+									output.write("Content-Type: application/xml\r\n".getBytes());
+									output.write("\r\n".getBytes());
+									output.write(content1);
+									output.flush();
+								} catch (Exception e) {
+									e.printStackTrace();
+								}
 							} catch (Exception e) {
-								e.printStackTrace();
+								output = socket.getOutputStream();
+								output.write("HTTP/1.1 404 Not Found\r\n".getBytes());
+								output.flush();
+
 							}
 						} else {
 							try {
@@ -593,5 +694,11 @@ public class ServiceThread implements Runnable {
 			e1.printStackTrace();
 		}
 
+	}
+
+	public static void transform(Source xmlSource, Source xsltSource, Result result) throws TransformerException {
+		TransformerFactory tFactory = TransformerFactory.newInstance();
+		Transformer transformer = tFactory.newTransformer(xsltSource);
+		transformer.transform(xmlSource, result);
 	}
 }

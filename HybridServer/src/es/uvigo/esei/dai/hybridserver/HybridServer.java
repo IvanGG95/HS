@@ -31,7 +31,15 @@ public class HybridServer {
 //		threadPool = Executors.newFixedThreadPool(50);
 //		SERVICE_PORT = 8888;
 //	}
-
+	
+	public HybridServer(Configuration conf) {
+		array.add(conf.getDbURL());
+		array.add(conf.getDbUser());
+		array.add(conf.getDbPassword());
+		threadPool = Executors.newFixedThreadPool(conf.getNumClients());
+		SERVICE_PORT = conf.getHttpPort();
+	}
+	
 	public HybridServer(Properties properties) {
 		SERVICE_PORT = Integer.parseInt(properties.getProperty("port"));
 		threadPool = Executors.newFixedThreadPool(Integer.parseInt(properties.getProperty("numClients")));
