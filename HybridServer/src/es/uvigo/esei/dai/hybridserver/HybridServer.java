@@ -10,6 +10,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import javax.xml.ws.Endpoint;
+
 
 
 
@@ -17,9 +19,13 @@ public class HybridServer {
 	private int SERVICE_PORT;
 	private Thread serverThread;
 	private boolean stop;
+	private String serviceURL;
 	private ExecutorService threadPool;
 	private List<String> array;
 	public Properties properties;
+	private ArrayList<ServerConfiguration> servers;
+	private Endpoint ep;
+	
 	
 	public HybridServer() {
 		threadPool = Executors.newFixedThreadPool(50);
@@ -33,11 +39,14 @@ public class HybridServer {
 //	}
 	
 	public HybridServer(Configuration conf) {
+		array = new ArrayList();
 		array.add(conf.getDbURL());
 		array.add(conf.getDbUser());
 		array.add(conf.getDbPassword());
 		threadPool = Executors.newFixedThreadPool(conf.getNumClients());
 		SERVICE_PORT = conf.getHttpPort();
+		serviceURL = conf.getWebServiceURL();
+		servers= (ArrayList<ServerConfiguration>) conf.getServers();
 	}
 	
 	public HybridServer(Properties properties) {
@@ -47,7 +56,8 @@ public class HybridServer {
 		array.add(0, properties.getProperty("db.url"));
 		array.add(1, properties.getProperty("db.user"));
 		array.add(2, properties.getProperty("db.password"));
-		//pages = new HTMLDBDAO(array);
+		serviceURL="http://localhost:20000/hs";
+		servers=null;
 	}
 
 	public int getPort() {
@@ -55,6 +65,11 @@ public class HybridServer {
 	}
 
 	public void start() {
+		HybridServerService service = new HybridServerService(array);
+		//System.out.println(serviceURL);
+		ep =Endpoint.publish(serviceURL, 
+				service);
+		
 		this.serverThread = new Thread() {
 			@Override
 			public void run() {
@@ -64,7 +79,7 @@ public class HybridServer {
 						if (stop)
 							break;
 
-						threadPool.execute(new ServiceThread(clientSocket, array));
+						threadPool.execute(new ServiceThread(clientSocket, array, servers));
 					}
 				} catch (IOException e) {
 					e.printStackTrace();
@@ -78,7 +93,6 @@ public class HybridServer {
 
 	public void stop() {
 		this.stop = true;
-
 		try (Socket socket = new Socket("localhost", SERVICE_PORT)) {
 			// Esta conexiÃ³n se hace, simplemente, para "despertar" el hilo servidor
 		} catch (IOException e) {
@@ -86,6 +100,7 @@ public class HybridServer {
 		}
 
 		threadPool.shutdownNow();
+		ep.stop();
 
 		try {
 			threadPool.awaitTermination(Long.MAX_VALUE, TimeUnit.DAYS);

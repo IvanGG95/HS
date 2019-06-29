@@ -32,7 +32,9 @@ import org.w3c.dom.NodeList;
 
 
 public class XMLConfigurationLoader {
-	
+	public XMLConfigurationLoader() {
+		
+	}
 	public Configuration load(File xmlFile) throws Exception {
 		// Construcción del schema
 				SchemaFactory schemaFactory = 
@@ -69,8 +71,8 @@ public class XMLConfigurationLoader {
 				}
 				
 				return new Configuration(Integer.parseInt(document.getChildNodes().item(0).getChildNodes().item(1).getChildNodes().item(1).getTextContent()),
-						Integer.parseInt(document.getChildNodes().item(0).getChildNodes().item(1).getChildNodes().item(3).getTextContent()),
-						document.getChildNodes().item(0).getChildNodes().item(1).getChildNodes().item(5).getTextContent(),
+						Integer.parseInt(document.getChildNodes().item(0).getChildNodes().item(1).getChildNodes().item(5).getTextContent()),
+						document.getChildNodes().item(0).getChildNodes().item(1).getChildNodes().item(3).getTextContent(),
 						document.getChildNodes().item(0).getChildNodes().item(3).getChildNodes().item(1).getTextContent(),
 						document.getChildNodes().item(0).getChildNodes().item(3).getChildNodes().item(3).getTextContent(),
 						document.getChildNodes().item(0).getChildNodes().item(3).getChildNodes().item(5).getTextContent(),

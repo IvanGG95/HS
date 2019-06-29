@@ -8,6 +8,7 @@ import java.io.StringReader;
 import java.io.StringWriter;
 import java.net.Socket;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 
@@ -40,16 +41,18 @@ import es.uvigo.esei.dai.hybridserver.http.HTTPRequest;
 public class ServiceThread implements Runnable {
 	Socket socket;
 	private List<String> parametrosConexion;
+	private ArrayList<ServerConfiguration> servers;
 
-	public ServiceThread(Socket socket, List<String> parametrosConexion) {
+	public ServiceThread(Socket socket, List<String> parametrosConexion, ArrayList<ServerConfiguration> servers) {
 		this.socket = socket;
 		this.parametrosConexion = parametrosConexion;
-
+		this.servers = servers;
 	}
 
 	@Override
 	public void run() {
 		HTTPRequest request;
+		ClientHS remotes = new ClientHS(servers);
 		try {
 			request = new HTTPRequest(new InputStreamReader(socket.getInputStream()));
 			OutputStream output;
@@ -88,8 +91,19 @@ public class ServiceThread implements Runnable {
 						break;
 					case GET:
 						if (request.getResourceParameters().containsKey("uuid")) {
-							if (htmlDAO.uuidList().contains(request.getResourceParameters().get("uuid"))) {
-								String webPage = htmlDAO.getContent(request.getResourceParameters().get("uuid"));
+							if (htmlDAO.uuidList().contains(request.getResourceParameters().get("uuid")) || remotes
+									.getRemoteUuid("HTML").contains(request.getResourceParameters().get("uuid"))) {
+								String webPage = "";
+								if (htmlDAO.uuidList().contains(request.getResourceParameters().get("uuid"))) {
+									webPage = htmlDAO.getContent(request.getResourceParameters().get("uuid"));
+
+								} else if (remotes.getRemoteUuid("HTML")
+										.contains(request.getResourceParameters().get("uuid"))) {
+									webPage = remotes.getRemoteContent(request.getResourceParameters().get("uuid"),
+											"HTML");
+
+								}
+
 								byte[] content = webPage.getBytes();
 								try {
 									output = socket.getOutputStream();
@@ -116,10 +130,17 @@ public class ServiceThread implements Runnable {
 						} else {
 
 							String pageContainer = "";
-							if (!(htmlDAO.uuidList().isEmpty())) {
-								for (int i = 0; i < htmlDAO.uuidList().size(); i++) {
-									pageContainer += "<a href=\"html?uuid=" + htmlDAO.uuidList().get(i) + "\">"
-											+ htmlDAO.uuidList().get(i) + "</a>" + "</br>";
+
+							if ((!(htmlDAO.uuidList().isEmpty())) || (!(remotes.getRemoteUuid("HTML").isEmpty()))) {
+								ArrayList toPage = (ArrayList) htmlDAO.uuidList();
+								for (String uuid : remotes.getRemoteUuid("HTML")) {
+									if (!(toPage.contains(uuid))) {
+										toPage.add(uuid);
+									}
+								}
+								for (int i = 0; i < toPage.size(); i++) {
+									pageContainer += "<a href=\"html?uuid=" + toPage.get(i) + "\">" + toPage.get(i)
+											+ "</a>" + "</br>";
 
 								}
 								byte[] content = pageContainer.getBytes();
@@ -218,40 +239,151 @@ public class ServiceThread implements Runnable {
 								&& request.getResourceParameters().containsKey("xslt")) {
 
 							XSLTDAO xsltdao = new XSLTDAO(parametrosConexion);
-							if (xmldao.uuidList().contains(request.getResourceParameters().get("uuid"))
-									&& xsltdao.uuidList().contains(request.getResourceParameters().get("xslt"))) {
-								String uuidXSLT = request.getResourceParameters().get("xslt");
-								String uuidXSD = xsltdao.getUuidXSD(uuidXSLT);
-								XSDDAO xsddao = new XSDDAO(parametrosConexion);
-								String xsdContent = xsddao.getContent(uuidXSD);
-								String xmlContent = xmldao.getContent(request.getResourceParameters().get("uuid"));
+							if ((xmldao.uuidList().contains(request.getResourceParameters().get("uuid")) || remotes
+									.getRemoteUuid("XML").contains(request.getResourceParameters().get("uuid")))
+									&& (xsltdao.uuidList().contains(request.getResourceParameters().get("xslt"))
+											|| remotes.getRemoteUuid("XSLT")
+													.contains(request.getResourceParameters().get("xslt")))) {
+									String uuidXSLT = request.getResourceParameters().get("xslt");
+									String uuidXSD;
+									String xsdContent;
+									String xmlContent;
+									String xsltContent;
+									if(xsltdao.uuidList().contains(request.getResourceParameters().get("xslt"))) {
+										uuidXSD = xsltdao.getUuidXSD(uuidXSLT);
+										XSDDAO xsddao = new XSDDAO(parametrosConexion);
+										xsdContent = xsddao.getContent(uuidXSD);
+										xsltContent=xsltdao.getContent(uuidXSLT);
+									}else {
+										uuidXSD = remotes.getRemoteXSLTgetUuidXSD(uuidXSLT);
+										xsdContent = remotes.getRemoteContent(uuidXSD, "XSD");
+										xsltContent= remotes.getRemoteContent(request.getResourceParameters().get("xslt"), "XSLT");
+									}
+									if(xmldao.uuidList().contains(request.getResourceParameters().get("uuid"))) {
+										 xmlContent = xmldao.getContent(request.getResourceParameters().get("uuid"));
+									}else {
+										 xmlContent = remotes.getRemoteContent(request.getResourceParameters().get("uuid"), "XML");
+									}
+									
+
+									
+									
+									try {
+										SchemaFactory schemaFactory = SchemaFactory
+												.newInstance(XMLConstants.W3C_XML_SCHEMA_NS_URI);
+										Schema schema = schemaFactory
+												.newSchema(new StreamSource(new StringReader(xsdContent)));
+
+										// Construcción del parser del documento. Se establece el esquema y se activa
+										// la validación y comprobación de namespaces
+										DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+										factory.setValidating(false);
+										factory.setNamespaceAware(true);
+										factory.setSchema(schema);
+
+										// Se añade el manejador de errores
+										DocumentBuilder builder = factory.newDocumentBuilder();
+										builder.setErrorHandler(new SimpleErrorHandler());
+
+										builder.parse(new InputSource(new StringReader(xmlContent)));
+
+										StringWriter writer = new StringWriter();
+										transform(new StreamSource(new StringReader(xmlContent)),
+												new StreamSource(new StringReader(xsltContent)),
+												new StreamResult(writer));
+
+										String webPage = writer.toString();
+										byte[] content = webPage.getBytes();
+
+										try {
+											output = socket.getOutputStream();
+											output.write("HTTP/1.1 200 OK\r\n".getBytes());
+											String contentLenght = String.format("Content-Lenght: %d\r\n",
+													content.length);
+											output.write(contentLenght.getBytes());
+											output.write("Content-Type: text/html\r\n".getBytes());
+											output.write("\r\n".getBytes());
+											output.write(content);
+											output.flush();
+										} catch (Exception e) {
+											e.printStackTrace();
+										}
+									} catch (SAXException | ParserConfigurationException | TransformerException e) {
+										System.err.println("Documento XML no válido");
+										try {
+											output = socket.getOutputStream();
+											output.write("HTTP/1.1 400 Bad Request\r\n".getBytes());
+											output.flush();
+										} catch (Exception e1) {
+											e.printStackTrace();
+										}
+									}
+								
+							} else {
 								try {
-									SchemaFactory schemaFactory = SchemaFactory
-											.newInstance(XMLConstants.W3C_XML_SCHEMA_NS_URI);
-									Schema schema = schemaFactory
-											.newSchema(new StreamSource(new StringReader(xsdContent)));
+									output = socket.getOutputStream();
+									output.write("HTTP/1.1 404 Not Found\r\n".getBytes());
+									output.flush();
+								} catch (Exception e) {
+									e.printStackTrace();
+								}
+							}
 
-									// Construcción del parser del documento. Se establece el esquema y se activa
-									// la validación y comprobación de namespaces
-									DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-									factory.setValidating(false);
-									factory.setNamespaceAware(true);
-									factory.setSchema(schema);
+						}
+						if (!(request.getResourceParameters().containsKey("xslt"))) {
+							if (request.getResourceParameters().containsKey("uuid")) {
+								if (xmldao.uuidList().contains(request.getResourceParameters().get("uuid")) || remotes
+										.getRemoteUuid("XML").contains(request.getResourceParameters().get("uuid"))) {
+									String webPage = "";
+									if (xmldao.uuidList().contains(request.getResourceParameters().get("uuid"))) {
+										webPage = xmldao.getContent(request.getResourceParameters().get("uuid"));
 
-									// Se añade el manejador de errores
-									DocumentBuilder builder = factory.newDocumentBuilder();
-									builder.setErrorHandler(new SimpleErrorHandler());
+									} else if (remotes.getRemoteUuid("XML")
+											.contains(request.getResourceParameters().get("uuid"))) {
+										webPage = remotes.getRemoteContent(request.getResourceParameters().get("uuid"),
+												"XML");
 
-									builder.parse(new InputSource(new StringReader(xmlContent)));
-
-									StringWriter writer = new StringWriter();
-
-									transform(new StreamSource(new StringReader(xmlContent)),
-											new StreamSource(new StringReader(xsltdao.getContent(uuidXSLT))),
-											new StreamResult(writer));
-
-									String webPage = writer.toString();
+									}
 									byte[] content = webPage.getBytes();
+									try {
+										output = socket.getOutputStream();
+										output.write("HTTP/1.1 200 OK\r\n".getBytes());
+										String contentLenght = String.format("Content-Lenght: %d\r\n", content.length);
+										output.write(contentLenght.getBytes());
+										output.write("Content-Type: application/xml\r\n".getBytes());
+										output.write("\r\n".getBytes());
+										output.write(content);
+										output.flush();
+									} catch (Exception e) {
+										e.printStackTrace();
+									}
+
+								} else {
+									try {
+										output = socket.getOutputStream();
+										output.write("HTTP/1.1 404 Not Found\r\n".getBytes());
+										output.flush();
+									} catch (Exception e) {
+										e.printStackTrace();
+									}
+								}
+
+							} else {
+
+								String pageContainer = "";
+								if ((!(xmldao.uuidList().isEmpty())) || (!(remotes.getRemoteUuid("XML").isEmpty()))) {
+									ArrayList toPage = (ArrayList) xmldao.uuidList();
+									for (String uuid : remotes.getRemoteUuid("XML")) {
+										if (!(toPage.contains(uuid))) {
+											toPage.add(uuid);
+										}
+									}
+									for (int i = 0; i < toPage.size(); i++) {
+										pageContainer += "<a href=\"xml?uuid=" + toPage.get(i) + "\">" + toPage.get(i)
+												+ "</a>" + "</br>";
+
+									}
+									byte[] content = pageContainer.getBytes();
 
 									try {
 										output = socket.getOutputStream();
@@ -265,88 +397,17 @@ public class ServiceThread implements Runnable {
 									} catch (Exception e) {
 										e.printStackTrace();
 									}
-								} catch (SAXException | ParserConfigurationException | TransformerException e) {
-									System.err.println("Documento XML no válido");
+								} else {
 									try {
 										output = socket.getOutputStream();
-										output.write("HTTP/1.1 400 Bad Request\r\n".getBytes());
+										output.write("HTTP/1.1 404 Not Found\r\n".getBytes());
 										output.flush();
-									} catch (Exception e1) {
+									} catch (Exception e) {
 										e.printStackTrace();
 									}
 								}
-							} else {
-								try {
-									output = socket.getOutputStream();
-									output.write("HTTP/1.1 404 Not Found\r\n".getBytes());
-									output.flush();
-								} catch (Exception e) {
-									e.printStackTrace();
-								}
+
 							}
-
-						}
-
-						if (request.getResourceParameters().containsKey("uuid")) {
-							if (xmldao.uuidList().contains(request.getResourceParameters().get("uuid"))) {
-								String webPage = xmldao.getContent(request.getResourceParameters().get("uuid"));
-								byte[] content = webPage.getBytes();
-								try {
-									output = socket.getOutputStream();
-									output.write("HTTP/1.1 200 OK\r\n".getBytes());
-									String contentLenght = String.format("Content-Lenght: %d\r\n", content.length);
-									output.write(contentLenght.getBytes());
-									output.write("Content-Type: application/xml\r\n".getBytes());
-									output.write("\r\n".getBytes());
-									output.write(content);
-									output.flush();
-								} catch (Exception e) {
-									e.printStackTrace();
-								}
-
-							} else {
-								try {
-									output = socket.getOutputStream();
-									output.write("HTTP/1.1 404 Not Found\r\n".getBytes());
-									output.flush();
-								} catch (Exception e) {
-									e.printStackTrace();
-								}
-							}
-
-						} else {
-
-							String pageContainer = "";
-							if (!(xmldao.uuidList().isEmpty())) {
-								for (int i = 0; i < xmldao.uuidList().size(); i++) {
-									pageContainer += "<a href=\"xml?uuid=" + xmldao.uuidList().get(i) + "\">"
-											+ xmldao.uuidList().get(i) + "</a>" + "</br>";
-
-								}
-								byte[] content = pageContainer.getBytes();
-
-								try {
-									output = socket.getOutputStream();
-									output.write("HTTP/1.1 200 OK\r\n".getBytes());
-									String contentLenght = String.format("Content-Lenght: %d\r\n", content.length);
-									output.write(contentLenght.getBytes());
-									output.write("Content-Type: text/html\r\n".getBytes());
-									output.write("\r\n".getBytes());
-									output.write(content);
-									output.flush();
-								} catch (Exception e) {
-									e.printStackTrace();
-								}
-							} else {
-								try {
-									output = socket.getOutputStream();
-									output.write("HTTP/1.1 404 Not Found\r\n".getBytes());
-									output.flush();
-								} catch (Exception e) {
-									e.printStackTrace();
-								}
-							}
-
 						}
 
 						break;
@@ -417,8 +478,18 @@ public class ServiceThread implements Runnable {
 						break;
 					case GET:
 						if (request.getResourceParameters().containsKey("uuid")) {
-							if (xsddao.uuidList().contains(request.getResourceParameters().get("uuid"))) {
-								String webPage = xsddao.getContent(request.getResourceParameters().get("uuid"));
+							if (xsddao.uuidList().contains(request.getResourceParameters().get("uuid")) || remotes
+									.getRemoteUuid("XSD").contains(request.getResourceParameters().get("uuid"))) {
+								String webPage = "";
+								if (xsddao.uuidList().contains(request.getResourceParameters().get("uuid"))) {
+									webPage = xsddao.getContent(request.getResourceParameters().get("uuid"));
+
+								} else if (remotes.getRemoteUuid("XSD")
+										.contains(request.getResourceParameters().get("uuid"))) {
+									webPage = remotes.getRemoteContent(request.getResourceParameters().get("uuid"),
+											"XSD");
+
+								}
 								byte[] content = webPage.getBytes();
 								try {
 									output = socket.getOutputStream();
@@ -446,10 +517,16 @@ public class ServiceThread implements Runnable {
 						} else {
 
 							String pageContainer = "";
-							if (!(xsddao.uuidList().isEmpty())) {
-								for (int i = 0; i < xsddao.uuidList().size(); i++) {
-									pageContainer += "<a href=\"xsd?uuid=" + xsddao.uuidList().get(i) + "\">"
-											+ xsddao.uuidList().get(i) + "</a>" + "</br>";
+							if ((!(xsddao.uuidList().isEmpty())) || (!(remotes.getRemoteUuid("XSD").isEmpty()))) {
+								ArrayList toPage = (ArrayList) xsddao.uuidList();
+								for (String uuid : remotes.getRemoteUuid("XSD")) {
+									if (!(toPage.contains(uuid))) {
+										toPage.add(uuid);
+									}
+								}
+								for (int i = 0; i < toPage.size(); i++) {
+									pageContainer += "<a href=\"xsd?uuid=" + toPage.get(i) + "\">" + toPage.get(i)
+											+ "</a>" + "</br>";
 
 								}
 								byte[] content = pageContainer.getBytes();
@@ -559,8 +636,18 @@ public class ServiceThread implements Runnable {
 						break;
 					case GET:
 						if (request.getResourceParameters().containsKey("uuid")) {
-							if (xsltdao.uuidList().contains(request.getResourceParameters().get("uuid"))) {
-								String webPage = xsltdao.getContent(request.getResourceParameters().get("uuid"));
+							if (xsltdao.uuidList().contains(request.getResourceParameters().get("uuid")) || remotes
+									.getRemoteUuid("XSLT").contains(request.getResourceParameters().get("uuid"))) {
+								String webPage = "";
+								if (xsltdao.uuidList().contains(request.getResourceParameters().get("uuid"))) {
+									webPage = xsltdao.getContent(request.getResourceParameters().get("uuid"));
+
+								} else if (remotes.getRemoteUuid("XSLT")
+										.contains(request.getResourceParameters().get("uuid"))) {
+									webPage = remotes.getRemoteContent(request.getResourceParameters().get("uuid"),
+											"XSLT");
+
+								}
 								byte[] content = webPage.getBytes();
 								try {
 									output = socket.getOutputStream();
@@ -587,10 +674,16 @@ public class ServiceThread implements Runnable {
 						} else {
 
 							String pageContainer = "";
-							if (!(xsltdao.uuidList().isEmpty())) {
-								for (int i = 0; i < xsltdao.uuidList().size(); i++) {
-									pageContainer += "<a href=\"xslt?uuid=" + xsltdao.uuidList().get(i) + "\">"
-											+ xsltdao.uuidList().get(i) + "</a>" + "</br>";
+							if ((!(xsltdao.uuidList().isEmpty())) || (!(remotes.getRemoteUuid("XSLT").isEmpty()))) {
+								ArrayList toPage = (ArrayList) xsltdao.uuidList();
+								for (String uuid : remotes.getRemoteUuid("XSLT")) {
+									if (!(toPage.contains(uuid))) {
+										toPage.add(uuid);
+									}
+								}
+								for (int i = 0; i < toPage.size(); i++) {
+									pageContainer += "<a href=\"xslt?uuid=" + toPage.get(i) + "\">" + toPage.get(i)
+											+ "</a>" + "</br>";
 
 								}
 								byte[] content = pageContainer.getBytes();
